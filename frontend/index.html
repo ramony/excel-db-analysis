@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8">
-  <title>Excel SQL 工具 | Wails</title>
+  <title>Excel Query工具</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -13,10 +13,10 @@
     }
 
     .container {
-      max-width: 1000px;
+      max-width: 1200px;
       margin: 0 auto;
       background: white;
-      padding: 20px;
+      padding: 2px 20px;
       border-radius: 8px;
       box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
     }
@@ -35,9 +35,17 @@
       background: #0056b3;
     }
 
+    .btn-secondary {
+      background: #6c757d;
+    }
+
+    .btn-secondary:hover {
+      background: #545b62;
+    }
+
     #sqlInput {
       width: 100%;
-      height: 100px;
+      height: 40px;
       margin: 10px 0;
       padding: 8px;
       border: 1px solid #ddd;
@@ -49,6 +57,8 @@
       width: 100%;
       border-collapse: collapse;
       margin: 10px 0;
+      overflow-x: auto;
+      display: block;
     }
 
     #resultTable th,
@@ -56,6 +66,7 @@
       border: 1px solid #ddd;
       padding: 8px;
       text-align: left;
+      min-width: 100px;
     }
 
     #resultTable th {
@@ -81,33 +92,73 @@
       background-color: #f8d7da;
       color: #721c24;
     }
+
+    .pagination {
+      margin: 15px 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .pagination select,
+    .pagination input {
+      padding: 6px 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+
+    .page-info {
+      color: #666;
+    }
   </style>
 </head>
 
 <body>
   <div class="container">
-    <h1>Excel SQL 工具（Wails 版）</h1>
+    <h4>Excel Query 工具</h4>
 
-    <!-- 1. 导入 Excel 部分 -->
+    <!-- 导入 Excel 部分 -->
     <div>
-      <h3>1. 导入 Excel 到数据库</h3>
       <button class="btn" onclick="openExcel()">打开 Excel 文件</button>
-    </div>
-
-    <hr>
-
-    <!-- 2. 执行 SQL 部分 -->
-    <div>
-      <h3>2. 执行 SQL 查询</h3>
-      <textarea id="sqlInput" placeholder="输入 SQL 查询语句，例如：SELECT * FROM sheet1"></textarea>
       <button class="btn" onclick="executeSQL()">执行 SQL</button>
+      <button class="btn" onclick="exportExcel()">导出 Excel</button>
+
+      <select id="pageSizeSelect">
+        <option value="10">10 条/页</option>
+        <option value="20">20 条/页</option>
+        <option value="100">100 条/页</option>
+        <option value="500">500 条/页</option>
+      </select>
+
+    </div>
+    <!-- 执行 SQL 部分 -->
+    <div>
+      <textarea id="sqlInput" placeholder="输入 SQL 查询语句，例如：SELECT * FROM sheet1">SELECT * FROM sheet1</textarea>
+      <div style="display: flex; gap: 10px; align-items: center;">
+
+      </div>
     </div>
 
     <!-- 查询结果 -->
     <div id="resultContainer" class="hidden">
-      <h3>查询结果</h3>
-      <button class="btn" onclick="saveResult()">保存结果</button>
-      <table id="resultTable"></table>
+      <!-- 导出 Excel 按钮 -->
+
+      <!-- 分页控件 -->
+      <div class="pagination">
+        <button class="btn" onclick="changePage(1)" id="firstPageBtn">首页</button>
+        <button class="btn" onclick="changePage(-1)" id="prevPageBtn">上一页</button>
+        <input type="number" id="pageNumInput" min="1" value="1" style="width: 60px;">
+        <button class="btn" onclick="goToPage()">跳转</button>
+        <button class="btn" onclick="changePage(1)" id="nextPageBtn">下一页</button>
+        <button class="btn" onclick="changePage(0)" id="lastPageBtn">尾页</button>
+        <span class="page-info" id="pageInfo">总条数：0 | 总页数：0 | 当前第 1 页</span>
+      </div>
+
+      <!-- 结果表格 -->
+      <div style="overflow-x: auto;">
+        <table id="resultTable"></table>
+      </div>
     </div>
 
     <!-- 状态提示 -->
@@ -115,6 +166,12 @@
   </div>
 
   <script>
+    // 全局分页参数
+    let currentPage = 1;
+    let totalPages = 1;
+    let total = 0;
+    let currentSQL = ""; // 保存当前执行的 SQL
+
     // 显示状态提示
     function showStatus(message, isError = false) {
       const status = document.getElementById('status');
@@ -126,58 +183,57 @@
       // }, 3000);
     }
 
-    // 打开 Excel 文件（调用 Go 方法）
+    // 打开 Excel 文件
     async function openExcel() {
       try {
         showStatus('正在读取 Excel 文件...');
         const result = await window.go.main.App.OpenExcel();
-        showStatus(result, result.includes('失败'));
+        if (result.includes("数据库连接未初始化")) {
+          showStatus(result, true);
+          setTimeout(() => alert("数据库连接失败，请重启应用！"), 1000);
+        } else {
+          showStatus(result, result.includes('失败'));
+        }
       } catch (error) {
         showStatus('操作失败: ' + error.message, true);
+        alert("系统错误：" + error.message + "\n请重启应用！");
       }
     }
 
-    // 执行 SQL 查询（调用 Go 方法）
+    // 执行分页 SQL 查询
     async function executeSQL() {
       const sql = document.getElementById('sqlInput').value.trim();
+      const pageSize = parseInt(document.getElementById('pageSizeSelect').value);
+      currentPage = 1;
+      currentSQL = sql; // 保存当前 SQL
+
+      if (!sql) {
+        showStatus("请输入有效的 SQL 语句！", true);
+        return;
+      }
+
       try {
         showStatus('正在执行 SQL 查询...');
-        const result = await window.go.main.App.ExecuteSQL(sql);
+        const result = await window.go.main.App.ExecuteSQLWithPage(sql, currentPage, pageSize);
 
         if (result.error) {
           showStatus(result.error, true);
           return;
         }
 
-        // 显示结果表格
-        const container = document.getElementById('resultContainer');
-        const table = document.getElementById('resultTable');
-        container.classList.remove('hidden');
-        table.innerHTML = '';
+        // 更新分页参数
+        total = result.total;
+        totalPages = result.totalPages;
+        currentPage = result.currentPage;
 
-        // 构建表头
-        const thead = document.createElement('thead');
-        const headerRow = document.createElement('tr');
-        result.columns.forEach(col => {
-          const th = document.createElement('th');
-          th.textContent = col;
-          headerRow.appendChild(th);
-        });
-        thead.appendChild(headerRow);
-        table.appendChild(thead);
+        // 显示结果容器
+        document.getElementById('resultContainer').classList.remove('hidden');
 
-        // 构建表体
-        const tbody = document.createElement('tbody');
-        result.data.forEach(row => {
-          const tr = document.createElement('tr');
-          result.columns.forEach(col => {
-            const td = document.createElement('td');
-            td.textContent = row[col] || '';
-            tr.appendChild(td);
-          });
-          tbody.appendChild(tr);
-        });
-        table.appendChild(tbody);
+        // 渲染表格
+        renderTable(result.columns, result.data);
+
+        // 更新分页信息
+        updatePaginationInfo();
 
         showStatus(result.message);
       } catch (error) {
@@ -185,14 +241,121 @@
       }
     }
 
-    // 保存查询结果（调用 Go 方法）
-    async function saveResult() {
+    // 渲染结果表格
+    function renderTable(columns, data) {
+      const table = document.getElementById('resultTable');
+      table.innerHTML = '';
+
+      // 构建表头
+      const thead = document.createElement('thead');
+      const headerRow = document.createElement('tr');
+      columns.forEach(col => {
+        const th = document.createElement('th');
+        th.textContent = col;
+        headerRow.appendChild(th);
+      });
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+
+      // 构建表体
+      const tbody = document.createElement('tbody');
+      if (data.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = columns.length;
+        td.textContent = '暂无数据';
+        td.style.textAlign = 'center';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+      } else {
+        data.forEach(row => {
+          const tr = document.createElement('tr');
+          columns.forEach(col => {
+            const td = document.createElement('td');
+            td.textContent = row[col] || '';
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+      }
+      table.appendChild(tbody);
+    }
+
+    // 更新分页信息
+    function updatePaginationInfo() {
+      const pageInfo = document.getElementById('pageInfo');
+      pageInfo.textContent = `总条数：${total} | 总页数：${totalPages} | 当前第 ${currentPage} 页`;
+
+      document.getElementById('pageNumInput').value = currentPage;
+      document.getElementById('firstPageBtn').disabled = currentPage === 1;
+      document.getElementById('prevPageBtn').disabled = currentPage === 1;
+      document.getElementById('nextPageBtn').disabled = currentPage === totalPages;
+      document.getElementById('lastPageBtn').disabled = currentPage === totalPages;
+    }
+
+    // 切换页码
+    async function changePage(type) {
+      let newPage = currentPage;
+      if (type === -1) newPage = currentPage - 1;
+      else if (type === 1) newPage = currentPage + 1;
+      else if (type === 0) newPage = totalPages;
+
+      if (newPage < 1 || newPage > totalPages) return;
+      await loadPageData(newPage);
+    }
+
+    // 跳转到指定页码
+    async function goToPage() {
+      const inputPage = parseInt(document.getElementById('pageNumInput').value);
+      if (isNaN(inputPage) || inputPage < 1 || inputPage > totalPages) {
+        showStatus('请输入有效的页码', true);
+        return;
+      }
+      await loadPageData(inputPage);
+    }
+
+    // 加载指定页码数据
+    async function loadPageData(pageNum) {
+      const pageSize = parseInt(document.getElementById('pageSizeSelect').value);
+      if (!currentSQL) {
+        showStatus("请先执行 SQL 查询！", true);
+        return;
+      }
+
       try {
-        showStatus('正在保存文件...');
-        const result = await window.go.main.App.SaveResult();
+        showStatus(`正在加载第 ${pageNum} 页数据...`);
+        const result = await window.go.main.App.ExecuteSQLWithPage(currentSQL, pageNum, pageSize);
+
+        if (result.error) {
+          showStatus(result.error, true);
+          return;
+        }
+
+        currentPage = result.currentPage;
+        renderTable(result.columns, result.data);
+        updatePaginationInfo();
+
+        showStatus(`已加载第 ${pageNum} 页数据`);
+      } catch (error) {
+        showStatus('加载分页数据失败: ' + error.message, true);
+      }
+    }
+
+    // 导出 Excel（核心修改：传入实时 SQL）
+    async function exportExcel() {
+      // 检查是否有执行过 SQL
+      if (!currentSQL) {
+        showStatus("请先执行 SQL 查询后再导出！", true);
+        return;
+      }
+
+      try {
+        showStatus('正在导出 Excel 文件（实时查询数据）...');
+        // 调用重构后的导出方法，传入当前 SQL
+        const result = await window.go.main.App.ExportExcelBySQL(currentSQL);
         showStatus(result, result.includes('失败'));
       } catch (error) {
-        showStatus('保存失败: ' + error.message, true);
+        showStatus('导出失败: ' + error.message, true);
       }
     }
   </script>
